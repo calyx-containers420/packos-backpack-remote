@@ -40,7 +40,10 @@
   .dot[data-state="online"] { background: var(--ok); }
   .dot[data-state="stale"] { background: var(--warn); }
   .dot[data-state="offline"] { background: var(--bad); }
+  .status-top { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
   .showing { color: var(--muted); font-size: 14px; }
+  .quota { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .quota[data-low="true"] { color: var(--bad); font-weight: 600; }
   section { display: grid; gap: 10px; }
   h2 { margin: 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
   .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
@@ -53,7 +56,7 @@
   button.move.wide { grid-column: 1 / -1; }
   button.move.sent { outline: 2px solid var(--teal); outline-offset: 2px; }
   button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
-  .empty { color: var(--muted); font-size: 14px; margin: 0; }
+  .empty { color: var(--muted); font-size: 14px; margin: 0; grid-column: 1 / -1; }
   details { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 12px 16px; }
   summary { font-weight: 600; cursor: pointer; }
   .setup { display: grid; gap: 10px; margin-top: 12px; font-size: 14px; }
@@ -67,7 +70,8 @@
     padding: 8px 10px; display: block; user-select: all; }
   .hint { color: var(--muted); margin: 0; }
   .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-    background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 999px; font-size: 14px; font-weight: 600; max-width: calc(100% - 32px); }
+    background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 14px; font-size: 14px; font-weight: 600;
+    width: max-content; max-width: min(420px, calc(100% - 32px)); text-align: center; }
   @media (prefers-reduced-motion: reduce) { button.move:active { transform: none; } }
 </style>
 </head>
@@ -78,8 +82,12 @@
   </header>
 
   <div class="status" aria-live="polite">
-    <div class="status-line"><span class="dot" id="dot"></span><span id="heard">No channel set</span></div>
+    <div class="status-top">
+      <div class="status-line"><span class="dot" id="dot"></span><span id="heard">No channel set</span></div>
+      <button class="small" type="button" id="check">Check</button>
+    </div>
     <div class="showing" id="showing">Open Setup below and enter the backpack's channel.</div>
+    <div class="quota" id="quota"></div>
   </div>
 
   <section aria-labelledby="loops-h">
@@ -119,6 +127,7 @@
       <p class="hint">Set the kiosk browser's start page to this address, so the backpack listens on the same channel:</p>
       <code id="start">file:///sdcard/packos-kiosk/index.html?remote=…</code>
       <p class="hint">Anyone who knows the channel can change what the screen shows (only these buttons, nothing else). Keep it private; make a new one after the show.</p>
+      <p class="hint">The free relay allows 250 messages a day per internet connection, shared by this phone and the backpack on its hotspot. Each tap uses about two; the backpack sends nothing on its own.</p>
     </div>
   </details>
 </div>
@@ -133,7 +142,7 @@
   /** Friendly names for the loop files signage.py builds (loop-<key>.mp4). */
   const LOOP_NAMES = { street: ['Street', 'Walking past: quote in seconds'], gallery: ['All labels', 'Every sample label in turn'],
     options: ['Finishes & materials', 'One label, every option'], inside: ['Inside the label', 'Layers apart'], booth: ['Booth', 'The longer walkthrough'] };
-  const STALE_S = 150, OFFLINE_S = 600;
+  const ANSWER_MS = 12000;   // the backpack answers a command or a check within a few seconds when it is on and online
 
   /** @param {string} id @returns {any} */
   const $ = (id) => document.getElementById(id);
@@ -142,8 +151,11 @@
 
   /** @type {null|{v:number,screen:string,loop:string,pinned:boolean,label:string,step:string,loops:string[],labels:[string,string][],steps:[string,string][]}} */
   let state = null;
-  let heardAt = 0;   // ntfy server time (s) of the latest report
-  let skew = 0;      // phone clock minus server clock, from the relay's own timestamps
+  let heardAt = 0;     // relay time (s) of the latest report
+  let skew = 0;        // this phone's clock minus the relay's, from the relay's own timestamps
+  let askedAt = 0;     // relay-clock time (s) of the last command or check still waiting for an answer
+  let silent = false;  // the last command or check got no answer in time
+  let answerTimer = 0;
   /** @type {EventSource|null} */
   let source = null;
   let channel = '';
@@ -152,18 +164,43 @@
   try { channel = fromHash || localStorage.getItem(KEY) || ''; } catch (e) { channel = fromHash; }
   if (fromHash) { try { localStorage.setItem(KEY, fromHash); } catch (e) { /* kept in memory only */ } history.replaceState(null, '', location.pathname); }
 
+  const now = () => Date.now() / 1000 - skew;
   let toastTimer = 0;
   /** @param {string} text */
-  const toast = (text) => { const t = $('toast'); t.textContent = text; t.hidden = false; clearTimeout(toastTimer); toastTimer = window.setTimeout(() => { t.hidden = true; }, 2200); };
+  const toast = (text) => { const t = $('toast'); t.textContent = text; t.hidden = false; clearTimeout(toastTimer); toastTimer = window.setTimeout(() => { t.hidden = true; }, 2600); };
+
+  /** Messages left today for this connection (reading it costs nothing). */
+  const quota = () => {
+    fetch(RELAY + '/v1/account').then((r) => r.json()).then((a) => {
+      const left = a && a.stats && a.stats.messages_remaining, total = a && a.limits && a.limits.messages;
+      if (typeof left !== 'number') return;
+      const q = $('quota');
+      q.textContent = left + ' of ' + total + ' relay messages left today on this connection';
+      q.dataset.low = String(left < 40);
+    }).catch(() => {});
+  };
 
   /** @param {string} cmd @param {string} arg @param {HTMLElement} [button] */
   const send = (cmd, arg, button) => {
     if (!VALID.test(channel)) { $('setup').open = true; toast('Set the channel first'); return; }
     if (button) button.classList.add('sent');
     fetch(RELAY + '/' + channel, { method: 'POST', body: JSON.stringify({ cmd, arg }) })
-      .then((r) => { if (!r.ok) throw new Error(String(r.status)); toast(cmd === 'reload' ? 'Reloading the kiosk' : 'Sent'); })
-      .catch(() => toast('Not sent: check this phone\'s connection'))
-      .finally(() => { if (button) window.setTimeout(() => button.classList.remove('sent'), 600); });
+      .then((r) => {
+        if (r.status === 429) throw new Error('limit');
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
+      .then((m) => {
+        if (cmd !== 'status') toast(cmd === 'reload' ? 'Reloading the kiosk' : 'Sent');
+        askedAt = (m && m.time) || now(); silent = false;
+        clearTimeout(answerTimer);
+        answerTimer = window.setTimeout(() => { if (heardAt < askedAt) { silent = true; tick(); } }, ANSWER_MS);
+        tick();
+      })
+      .catch((error) => toast(error && error.message === 'limit'
+        ? 'The relay\'s daily limit is used up for this connection. It resets within 24 hours.'
+        : 'Not sent: check this phone\'s connection'))
+      .finally(() => { if (button) window.setTimeout(() => button.classList.remove('sent'), 600); quota(); });
   };
 
   /** @param {string} title @param {string} sub @param {string} cmd @param {string} arg @param {boolean} on */
@@ -181,51 +218,83 @@
     while (loops.lastChild && loops.lastChild !== rotation) loops.removeChild(loops.lastChild);
     rotation.setAttribute('aria-pressed', String(!!state && state.screen === 'attract' && !state.pinned));
     if (!state) return;
-    state.loops.forEach((key) => {
+    const s = state;
+    s.loops.forEach((key) => {
       const name = LOOP_NAMES[key] || [key, ''];
-      loops.appendChild(moveButton(name[0], name[1], 'loop', key, state.screen === 'attract' && state.pinned && state.loop === key));
+      loops.appendChild(moveButton(name[0], name[1], 'loop', key, s.screen === 'attract' && s.pinned && s.loop === key));
     });
     labels.textContent = '';
-    state.labels.forEach((pair) => labels.appendChild(moveButton(pair[1], '', 'label', pair[0], state.screen === 'sample' && state.label === pair[0])));
-    if (!state.labels.length) labels.appendChild(el('p', 'empty', 'This build has no sample labels.'));
+    s.labels.forEach((pair) => labels.appendChild(moveButton(pair[1], '', 'label', pair[0], s.screen === 'sample' && s.label === pair[0])));
+    if (!s.labels.length) labels.appendChild(el('p', 'empty', 'This build has no sample labels.'));
     steps.textContent = '';
-    state.steps.forEach((pair, i) => steps.appendChild(moveButton(pair[1], 'Step ' + (i + 1), 'step', pair[0], state.screen === 'chapter' && state.step === pair[0])));
+    s.steps.forEach((pair, i) => steps.appendChild(moveButton(pair[1], 'Step ' + (i + 1), 'step', pair[0], s.screen === 'chapter' && s.step === pair[0])));
   };
 
   const describe = () => {
-    if (!state) return 'Waiting for the backpack to report in (it does every minute while it is on and online).';
-    if (state.screen === 'attract') {
-      const name = (LOOP_NAMES[state.loop] || [state.loop])[0];
-      return state.pinned ? 'Showing: ' + name + ' loop, held' : 'Showing: loops in turn (now ' + name + ')';
-    }
-    if (state.screen === 'sample') { const l = state.labels.filter((p) => p[0] === state.label)[0]; return 'Showing: label ' + (l ? l[1] : state.label); }
-    if (state.screen === 'chapter') { const s = state.steps.filter((p) => p[0] === state.step)[0]; return 'Showing: ' + (s ? s[1] : 'a step'); }
-    return 'Showing: the touch menu';
+    if (!state) return 'The backpack has not reported in yet.';
+    const s = state;
+    let what = 'the touch menu';
+    if (s.screen === 'attract') {
+      const name = (LOOP_NAMES[s.loop] || [s.loop])[0];
+      what = s.pinned ? name + ' loop, held' : 'loops in turn (' + name + ')';
+    } else if (s.screen === 'sample') { const l = s.labels.filter((p) => p[0] === s.label)[0]; what = 'label ' + (l ? l[1] : s.label); }
+    else if (s.screen === 'chapter') { const c = s.steps.filter((p) => p[0] === s.step)[0]; what = c ? c[1] : 'a step'; }
+    // Visitors' taps are not reported (to save relay messages), so this is the screen as of the last answer.
+    return 'Showing ' + what + ' · as of ' + new Date((heardAt + skew) * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   };
 
   const tick = () => {
     const dot = $('dot'), heard = $('heard');
+    $('showing').textContent = VALID.test(channel) ? describe() : 'Open Setup below and enter the backpack\'s channel.';
     if (!VALID.test(channel)) { dot.dataset.state = ''; heard.textContent = 'No channel set'; return; }
-    if (!heardAt) { dot.dataset.state = ''; heard.textContent = 'Listening on ' + channel; $('showing').textContent = describe(); return; }
-    const ago = Math.max(0, Math.round(Date.now() / 1000 - skew - heardAt));
-    dot.dataset.state = ago < STALE_S ? 'online' : ago < OFFLINE_S ? 'stale' : 'offline';
-    const when = ago < 60 ? ago + ' s ago' : Math.round(ago / 60) + ' min ago';
-    heard.textContent = (ago < STALE_S ? 'Backpack online' : ago < OFFLINE_S ? 'Backpack quiet' : 'Backpack not heard from') + ' · ' + when;
-    $('showing').textContent = describe();
+    if (askedAt && heardAt < askedAt) {
+      dot.dataset.state = silent ? 'offline' : '';
+      heard.textContent = silent ? 'Backpack didn\'t answer: is it on, online and set to this channel?' : 'Asking the backpack…';
+      return;
+    }
+    if (!heardAt) { dot.dataset.state = ''; heard.textContent = 'Listening on ' + channel.slice(0, 6) + '…'; return; }
+    const ago = Math.max(0, Math.round(now() - heardAt));
+    const when = ago < 60 ? 'just now' : ago < 3600 ? Math.round(ago / 60) + ' min ago' : 'over an hour ago';
+    dot.dataset.state = ago < 300 ? 'online' : 'stale';
+    heard.textContent = (ago < 300 ? 'Backpack answered ' : 'Last answer ') + when;
   };
+
+  const check = () => send('status', '');
 
   const listen = () => {
     if (source) source.close();
-    state = null; heardAt = 0; render(); tick();
+    state = null; heardAt = 0; askedAt = 0; silent = false; render(); tick();
     $('channel').value = channel;
     $('start').textContent = 'file:///sdcard/packos-kiosk/index.html?remote=' + (channel || '…');
     if (!VALID.test(channel)) { $('setup').open = true; return; }
-    // The relay keeps recent reports, so the last one (from up to 15 min ago) arrives at once.
-    source = new EventSource(RELAY + '/' + channel + '-state/sse?since=' + (Math.floor(Date.now() / 1000) - 900));
-    source.addEventListener('open', (event) => {
+    connect(true);
+    quota();
+  };
+
+  let streamHeard = 0;
+  /** The relay keeps reports for 12 hours: the last one shows at once, then a check asks for the current screen.
+   * @param {boolean} first a new page or channel (not a reconnect after the phone slept) */
+  const connect = (first) => {
+    if (source) source.close();
+    streamHeard = Date.now();
+    const next = new EventSource(RELAY + '/' + channel + '-state/sse?since=' + (first || !heardAt ? '12h' : String(Math.floor(heardAt))));
+    source = next;
+    let checked = !first;
+    next.addEventListener('open', (event) => {
+      streamHeard = Date.now();
       try { const m = JSON.parse(/** @type {MessageEvent} */ (event).data); if (m && m.time) skew = Date.now() / 1000 - m.time; } catch (e) { /* the browser's own open event */ }
+      if (!checked) { checked = true; window.setTimeout(check, 400); }   // once per page open, not on every reconnect
     });
-    source.addEventListener('message', (event) => {
+    next.addEventListener('keepalive', () => { streamHeard = Date.now(); });
+    // ntfy's stream carries no event ids, so the browser's own retry would skip reports sent meanwhile: reconnect
+    // ourselves, asking for everything since the last report.
+    next.addEventListener('error', () => {
+      if (source !== next) return;
+      next.close();
+      window.setTimeout(() => { if (source === next) connect(false); }, 3000);
+    });
+    next.addEventListener('message', (event) => {
+      streamHeard = Date.now();
       let m = null, s = null;
       try { m = JSON.parse(event.data); s = JSON.parse(m.message); } catch (e) { return; }
       if (!m || m.event !== 'message' || !s || s.v !== 1 || m.time < heardAt) return;
@@ -233,8 +302,12 @@
       state = s; heardAt = m.time; render(); tick();
     });
   };
+  // A phone that slept, or a hotspot that changed towers, can leave the stream dead without an error: the relay sends a
+  // keepalive every 45 s, so 100 s of silence means reconnect.
+  const stale = () => VALID.test(channel) && Date.now() - streamHeard > 100 * 1000;
 
   document.querySelectorAll('[data-cmd]').forEach((b) => b.addEventListener('click', () => send(b.getAttribute('data-cmd') || '', '', /** @type {HTMLElement} */ (b))));
+  $('check').addEventListener('click', check);
   $('save').addEventListener('click', () => {
     const value = $('channel').value.trim();
     if (!VALID.test(value)) { toast('Use 12–58 letters, digits, - or _'); return; }
@@ -246,7 +319,13 @@
     $('channel').value = 'pk-' + Array.prototype.map.call(bytes, (b) => ('0' + b.toString(16)).slice(-2)).join('');
     toast('New channel: tap Use, then set the kiosk start page');
   });
-  setInterval(tick, 5000);
+  // Back on this page after a while (a phone locks often at a show): ask what the screen shows now.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible' || !VALID.test(channel)) return;
+    if (stale()) connect(false);
+    if (now() - Math.max(heardAt, askedAt) > 120) check();
+  });
+  setInterval(() => { if (stale()) connect(false); tick(); }, 5000);
   listen();
 })();
 </script>

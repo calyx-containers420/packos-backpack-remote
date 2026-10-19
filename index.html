@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#067a6f">
 <meta name="robots" content="noindex">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Backpack">
 <title>Backpack Remote</title>
 <!--
   packOS backpack remote: staff steer the signage kiosk (demo-studio/kiosk, opened with ?remote=<channel>) from a phone.
@@ -12,142 +14,222 @@
   what it is showing. This page holds no secrets: the channel lives in this phone's storage (or the link's #c=…).
 -->
 <style>
-  /* Layout: one thumb-width column; status first, then the moves grouped as the kiosk groups them. */
+  /* Layout: one-thumb remote. "Now showing" sticks to the top; one group of moves at a time; tabs at the bottom edge. */
   :root {
-    --bg: #f6f7f6; --surface: #ffffff; --ink: #14201e; --muted: #5b6a67; --line: #dfe5e3;
-    --teal: #067a6f; --teal-ink: #ffffff; --teal-soft: #e3f1ef; --ok: #138a4a; --warn: #a86a00; --bad: #b3261e;
+    --bg: #f3f5f4; --surface: #ffffff; --ink: #13201e; --muted: #5d6c69; --line: #dde4e2;
+    --teal: #067a6f; --teal-ink: #ffffff; --teal-soft: #e1f0ed; --ok: #138a4a; --warn: #a86a00; --bad: #b3261e;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --tabbar: 64px;
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #0f1514; --surface: #18201f; --ink: #e8efed; --muted: #9aa9a6; --line: #2a3533;
-      --teal: #2bb3a5; --teal-ink: #06201d; --teal-soft: #173431; --ok: #4fd08a; --warn: #f0b44c; --bad: #ff8a80; color-scheme: dark; }
+    :root { --bg: #0e1413; --surface: #172020; --ink: #e6eeec; --muted: #98a8a5; --line: #263230;
+      --teal: #2bb3a5; --teal-ink: #05201c; --teal-soft: #15302d; --ok: #4fd08a; --warn: #f0b44c; --bad: #ff8a80; color-scheme: dark; }
   }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  [hidden] { display: none !important; }
   html, body { margin: 0; }
-  body { background: var(--bg); color: var(--ink); font: 16px/1.4 var(--sans); -webkit-text-size-adjust: 100%;
-    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
-    padding-block: calc(12px + env(safe-area-inset-top, 0px)) calc(32px + env(safe-area-inset-bottom, 0px)); }
-  .wrap { max-width: 520px; margin: 0 auto; display: grid; gap: 20px; }
-  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-  .brand { font-weight: 700; font-size: 20px; letter-spacing: -0.01em; }
+  body { background: var(--bg); color: var(--ink); font: 16px/1.35 var(--sans); -webkit-text-size-adjust: 100%;
+    padding-bottom: calc(var(--tabbar) + env(safe-area-inset-bottom, 0px) + 16px); }
+  .gutter { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .col { max-width: 520px; margin: 0 auto; }
+  button { font: inherit; color: inherit; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+
+  /* Now showing */
+  .now { position: sticky; top: 0; z-index: 2; background: var(--bg); padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-bottom: 12px; }
+  .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+  .brand { font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
   .brand span { color: var(--teal); }
-  .brand small { display: block; font-weight: 500; font-size: 13px; color: var(--muted); letter-spacing: 0; }
-  .status { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; display: grid; gap: 4px; }
-  .status-line { display: flex; align-items: center; gap: 10px; font-weight: 600; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
-  .dot[data-state="online"] { background: var(--ok); }
-  .dot[data-state="stale"] { background: var(--warn); }
-  .dot[data-state="offline"] { background: var(--bad); }
-  .status-top { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
-  .showing { color: var(--muted); font-size: 14px; }
-  .quota { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-  .quota[data-low="true"] { color: var(--bad); font-weight: 600; }
-  section { display: grid; gap: 10px; }
-  h2 { margin: 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  .pill { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--muted);
+    background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  .pill[data-state="online"] { color: var(--ok); } .pill[data-state="online"] .dot { background: var(--ok); }
+  .pill[data-state="stale"] { color: var(--warn); } .pill[data-state="stale"] .dot { background: var(--warn); }
+  .pill[data-state="offline"] { color: var(--bad); } .pill[data-state="offline"] .dot { background: var(--bad); }
+  .pill[data-state="asking"] .dot { animation: pulse 1s ease-in-out infinite; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 14px 14px 14px 16px;
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+  .eyebrow { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  .what { margin: 2px 0 0; font-size: 22px; font-weight: 700; line-height: 1.15; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+  .detail { margin: 3px 0 0; font-size: 13px; color: var(--muted); }
+  .refresh { width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); display: grid; place-items: center; cursor: pointer; }
+  .refresh svg { width: 20px; height: 20px; }
+  .refresh[data-busy="true"] svg { animation: spin 0.9s linear infinite; }
+  .alert { margin: 10px 0 0; font-size: 13px; font-weight: 600; color: var(--bad); }
+
+  /* Moves */
+  .panel { display: grid; gap: 10px; padding-top: 4px; }
+  .panel h2 { margin: 6px 0 0; font-size: 13px; font-weight: 700; color: var(--muted); }
   .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  button.move { appearance: none; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 12px;
-    min-height: 56px; padding: 10px 12px; font: 600 15px/1.2 var(--sans); text-align: left; cursor: pointer; display: grid; gap: 2px; }
-  button.move small { font-weight: 500; font-size: 12px; color: var(--muted); }
-  button.move:active { transform: scale(0.98); }
-  button.move[aria-pressed="true"] { background: var(--teal); border-color: var(--teal); color: var(--teal-ink); }
-  button.move[aria-pressed="true"] small { color: var(--teal-ink); opacity: 0.85; }
-  button.move.wide { grid-column: 1 / -1; }
-  button.move.sent { outline: 2px solid var(--teal); outline-offset: 2px; }
-  button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
-  .empty { color: var(--muted); font-size: 14px; margin: 0; grid-column: 1 / -1; }
-  details { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 12px 16px; }
-  summary { font-weight: 600; cursor: pointer; }
-  .setup { display: grid; gap: 10px; margin-top: 12px; font-size: 14px; }
-  .setup label { font-weight: 600; }
-  .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .list { display: grid; gap: 8px; }
+  .move { position: relative; appearance: none; width: 100%; border: 1px solid var(--line); background: var(--surface); border-radius: 14px;
+    min-height: 64px; padding: 12px 28px 12px 14px; text-align: left; cursor: pointer; display: grid; align-content: center; gap: 3px;
+    font-weight: 650; font-size: 16px; transition: background-color 120ms, border-color 120ms, transform 80ms; }
+  .move small { font-weight: 500; font-size: 12.5px; color: var(--muted); }
+  .move:active { transform: scale(0.98); }
+  .move[aria-pressed="true"] { background: var(--teal); border-color: var(--teal); color: var(--teal-ink); }
+  .move[aria-pressed="true"] small { color: var(--teal-ink); opacity: 0.85; }
+  .move[data-pending="true"] { border-color: var(--teal); background: var(--teal-soft); }
+  .move[data-pending="true"]::after { content: ""; position: absolute; top: 12px; right: 12px; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--teal); animation: pulse 0.9s ease-in-out infinite; }
+  .move.wide { grid-column: 1 / -1; min-height: 56px; }
+  .step { grid-template-columns: 32px minmax(0, 1fr); align-items: center; column-gap: 12px; }
+  .step .num { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-size: 14px; font-weight: 700;
+    background: var(--bg); border: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  .move[aria-pressed="true"] .num { background: transparent; border-color: currentColor; }
+  .empty { grid-column: 1 / -1; margin: 0; padding: 22px 16px; text-align: center; color: var(--muted); font-size: 14px;
+    border: 1px dashed var(--line); border-radius: 14px; }
+
+  /* More */
+  .group { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 14px 16px; }
+  .row + .row { border-top: 1px solid var(--line); }
+  .row p { margin: 0; }
+  .row .title { font-weight: 650; }
+  .row .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .action { appearance: none; border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 9px 14px; font-size: 14px;
+    font-weight: 650; cursor: pointer; white-space: nowrap; }
+  .action.primary { background: var(--teal); border-color: var(--teal); color: var(--teal-ink); }
+  .action.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .field { display: grid; gap: 8px; padding: 14px 16px; }
+  .field + .row, .row + .field, .field + .field { border-top: 1px solid var(--line); }
+  .field label { font-weight: 650; }
+  .inline { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
   input { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: 15px var(--mono);
     background: var(--bg); color: var(--ink); }
-  button.small { appearance: none; border: 1px solid var(--teal); background: var(--teal-soft); color: var(--ink); border-radius: 10px;
-    padding: 10px 12px; font: 600 14px var(--sans); cursor: pointer; }
-  code { font: 13px/1.45 var(--mono); word-break: break-all; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  code { font: 12.5px/1.45 var(--mono); word-break: break-all; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
     padding: 8px 10px; display: block; user-select: all; }
-  .hint { color: var(--muted); margin: 0; }
-  .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  .hint { margin: 0; font-size: 13px; color: var(--muted); }
+  .quota { font-variant-numeric: tabular-nums; }
+  .quota[data-low="true"] { color: var(--bad); font-weight: 650; }
+
+  /* Tabs */
+  .tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; background: var(--surface); border-top: 1px solid var(--line);
+    padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .tabs .col { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); height: var(--tabbar); }
+  .tab { position: relative; appearance: none; border: 0; background: none; display: grid; justify-items: center; align-content: center; gap: 3px; cursor: pointer;
+    font-size: 11.5px; font-weight: 650; color: var(--muted); }
+  .tab svg { width: 24px; height: 24px; }
+  .tab[aria-selected="true"] { color: var(--teal); }
+  .tab .badge { position: absolute; top: 12px; left: calc(50% + 9px); width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
+
+  .toast { position: fixed; left: 50%; transform: translateX(-50%); z-index: 4; bottom: calc(var(--tabbar) + env(safe-area-inset-bottom, 0px) + 12px);
     background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 14px; font-size: 14px; font-weight: 600;
     width: max-content; max-width: min(420px, calc(100% - 32px)); text-align: center; }
-  @media (prefers-reduced-motion: reduce) { button.move:active { transform: none; } }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .move { transition: none; } .move:active { transform: none; }
+    .pill[data-state="asking"] .dot, .move[data-pending="true"]::after, .refresh[data-busy="true"] svg { animation: none; }
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <div class="brand">pack<span>OS</span><small>Backpack remote</small></div>
-  </header>
-
-  <div class="status" aria-live="polite">
-    <div class="status-top">
-      <div class="status-line"><span class="dot" id="dot"></span><span id="heard">No channel set</span></div>
-      <button class="small" type="button" id="check">Check</button>
+<header class="now gutter">
+  <div class="col">
+    <div class="bar">
+      <div class="brand">pack<span>OS</span> remote</div>
+      <div class="pill" id="pill"><span class="dot"></span><span id="heard">Not set up</span></div>
     </div>
-    <div class="showing" id="showing">Open Setup below and enter the backpack's channel.</div>
-    <div class="quota" id="quota"></div>
-  </div>
-
-  <section aria-labelledby="loops-h">
-    <h2 id="loops-h">Attract loop</h2>
-    <div class="grid" id="loops">
-      <button class="move wide" type="button" data-cmd="attract">All loops in turn<small>The default rotation</small></button>
-    </div>
-  </section>
-
-  <section aria-labelledby="labels-h">
-    <h2 id="labels-h">Show a label</h2>
-    <div class="grid" id="labels"><p class="empty">Labels appear when the backpack reports in.</p></div>
-  </section>
-
-  <section aria-labelledby="steps-h">
-    <h2 id="steps-h">How it works</h2>
-    <div class="grid" id="steps"><p class="empty">Steps appear when the backpack reports in.</p></div>
-  </section>
-
-  <section aria-labelledby="screen-h">
-    <h2 id="screen-h">Screen</h2>
-    <div class="grid">
-      <button class="move" type="button" data-cmd="menu">Menu<small>The touch menu</small></button>
-      <button class="move" type="button" data-cmd="reload">Reload<small>Restart the kiosk page</small></button>
-    </div>
-  </section>
-
-  <details id="setup">
-    <summary>Setup</summary>
-    <div class="setup">
-      <label for="channel">Channel</label>
-      <div class="row">
-        <input id="channel" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="12–58 letters, digits, - or _">
-        <button class="small" type="button" id="save">Use</button>
+    <div class="card" aria-live="polite">
+      <div>
+        <p class="eyebrow">Now on the backpack</p>
+        <p class="what" id="what">Not connected</p>
+        <p class="detail" id="showing">Enter or make a channel under Connection.</p>
       </div>
-      <button class="small" type="button" id="fresh">Make a new channel</button>
-      <p class="hint">Set the kiosk browser's start page to this address, so the backpack listens on the same channel:</p>
-      <code id="start">file:///sdcard/packos-kiosk/index.html?remote=…</code>
-      <p class="hint">Anyone who knows the channel can change what the screen shows (only these buttons, nothing else). Keep it private; make a new one after the show.</p>
-      <p class="hint">The free relay allows 250 messages a day per internet connection, shared by this phone and the backpack on its hotspot. Each tap uses about two; the backpack sends nothing on its own.</p>
+      <button class="refresh" type="button" id="check" aria-label="Check what the backpack shows">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg>
+      </button>
     </div>
-  </details>
-</div>
-<div class="toast" id="toast" hidden></div>
+    <p class="alert" id="alert" hidden></p>
+  </div>
+</header>
+
+<main class="gutter">
+  <div class="col">
+    <section class="panel" id="panel-labels" role="tabpanel" aria-labelledby="tab-labels">
+      <div class="grid" id="labels"><p class="empty">Labels appear once the backpack answers.</p></div>
+    </section>
+
+    <section class="panel" id="panel-loops" role="tabpanel" aria-labelledby="tab-loops" hidden>
+      <div class="grid" id="loops">
+        <button class="move wide" type="button" data-cmd="attract">All loops in turn<small>The default rotation</small></button>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-steps" role="tabpanel" aria-labelledby="tab-steps" hidden>
+      <div class="list" id="steps"><p class="empty">Steps appear once the backpack answers.</p></div>
+    </section>
+
+    <section class="panel" id="panel-more" role="tabpanel" aria-labelledby="tab-more" hidden>
+      <h2 id="screen-h">Screen</h2>
+      <div class="group" id="screen-group">
+        <div class="row"><div><p class="title">Touch menu</p><p class="sub">Open the kiosk's menu for a visitor.</p></div>
+          <button class="action" type="button" data-cmd="menu">Open</button></div>
+        <div class="row"><div><p class="title">Reload kiosk</p><p class="sub" id="reload-sub">Restarts the page on the backpack.</p></div>
+          <button class="action" type="button" data-cmd="reload" id="reload">Reload</button></div>
+      </div>
+
+      <h2>Connection</h2>
+      <div class="group" id="setup">
+        <div class="field">
+          <label for="channel">Channel</label>
+          <div class="inline">
+            <input id="channel" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="pk-…">
+            <button class="action primary" type="button" id="save">Use</button>
+          </div>
+          <p class="hint">Only people with this name can steer the screen. Keep it private; make a new one after each show.</p>
+        </div>
+        <div class="row"><div><p class="title">New channel</p><p class="sub">For a new show or a new backpack.</p></div>
+          <button class="action" type="button" id="fresh">Make</button></div>
+        <div class="field">
+          <p class="hint">The backpack's kiosk browser start page:</p>
+          <code id="start">file:///sdcard/packos-kiosk/index.html?remote=…</code>
+          <div><button class="action" type="button" id="copy">Copy address</button></div>
+        </div>
+        <div class="row"><div><p class="title">Relay messages today</p><p class="sub quota" id="quota">Checking…</p></div></div>
+      </div>
+      <p class="hint">The free relay allows 250 messages a day per internet connection, shared by this phone and the backpack on its hotspot. Each tap uses about two; the backpack sends nothing on its own.</p>
+    </section>
+  </div>
+</main>
+
+<nav class="tabs" role="tablist" aria-label="Remote sections">
+  <div class="col">
+    <button class="tab" type="button" role="tab" id="tab-labels" aria-controls="panel-labels" data-tab="labels">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z"/><circle cx="8" cy="8" r="1.6"/></svg>Labels</button>
+    <button class="tab" type="button" role="tab" id="tab-loops" aria-controls="panel-loops" data-tab="loops">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/></svg>Loops</button>
+    <button class="tab" type="button" role="tab" id="tab-steps" aria-controls="panel-steps" data-tab="steps">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 6h11M10 12h11M10 18h11"/><path d="M4 6h1v4M4 10h2"/><path d="M4 15.5a1.5 1.5 0 0 1 3 0c0 1.5-3 2-3 3.5h3"/></svg>Steps</button>
+    <button class="tab" type="button" role="tab" id="tab-more" aria-controls="panel-more" data-tab="more">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>More<span class="badge" id="more-badge" hidden></span></button>
+  </div>
+</nav>
+<div class="toast" id="toast" role="status" hidden></div>
 
 <script>
 // @ts-check
 (() => {
   const RELAY = 'https://ntfy.sh';
-  const KEY = 'packos-backpack-channel';
+  const KEY = 'packos-backpack-channel', TAB_KEY = 'packos-backpack-tab';
   const VALID = /^[A-Za-z0-9_-]{12,58}$/;
   /** Friendly names for the loop files signage.py builds (loop-<key>.mp4). */
-  const LOOP_NAMES = { street: ['Street', 'Walking past: quote in seconds'], gallery: ['All labels', 'Every sample label in turn'],
-    options: ['Finishes & materials', 'One label, every option'], inside: ['Inside the label', 'Layers apart'], booth: ['Booth', 'The longer walkthrough'] };
+  const LOOP_NAMES = { street: ['Street', 'Quote in seconds, for passers-by'], gallery: ['All labels', 'Every sample label in turn'],
+    options: ['Finishes & materials', 'One label, every option'], inside: ['Inside the label', 'The layers, pulled apart'], booth: ['Booth', 'The longer walkthrough'] };
   const ANSWER_MS = 12000;   // the backpack answers a command or a check within a few seconds when it is on and online
+  const TABS = ['labels', 'loops', 'steps', 'more'];
 
   /** @param {string} id @returns {any} */
   const $ = (id) => document.getElementById(id);
   /** @param {string} tag @param {string} [cls] @param {string} [text] */
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
+  /** @param {string} key @returns {string} */
+  const recall = (key) => { try { return localStorage.getItem(key) || ''; } catch (e) { return ''; } };
+  /** @param {string} key @param {string} value */
+  const keep = (key, value) => { try { localStorage.setItem(key, value); } catch (e) { /* kept in memory only */ } };
 
   /** @type {null|{v:number,screen:string,loop:string,pinned:boolean,label:string,step:string,loops:string[],labels:[string,string][],steps:[string,string][]}} */
   let state = null;
@@ -156,18 +238,34 @@
   let askedAt = 0;     // relay-clock time (s) of the last command or check still waiting for an answer
   let silent = false;  // the last command or check got no answer in time
   let answerTimer = 0;
+  /** The move waiting for the backpack's answer: its button shows as sending until then. @type {string} */
+  let pendingMove = '';
   /** @type {EventSource|null} */
   let source = null;
   let channel = '';
 
   const fromHash = (/[#&]c=([A-Za-z0-9_-]{12,58})/.exec(location.hash) || [])[1] || '';
-  try { channel = fromHash || localStorage.getItem(KEY) || ''; } catch (e) { channel = fromHash; }
-  if (fromHash) { try { localStorage.setItem(KEY, fromHash); } catch (e) { /* kept in memory only */ } history.replaceState(null, '', location.pathname); }
+  channel = fromHash || recall(KEY);
+  if (fromHash) { keep(KEY, fromHash); history.replaceState(null, '', location.pathname); }
 
   const now = () => Date.now() / 1000 - skew;
+  const buzz = () => { try { if (navigator.vibrate) navigator.vibrate(12); } catch (e) { /* no haptics */ } };
   let toastTimer = 0;
   /** @param {string} text */
-  const toast = (text) => { const t = $('toast'); t.textContent = text; t.hidden = false; clearTimeout(toastTimer); toastTimer = window.setTimeout(() => { t.hidden = true; }, 2600); };
+  const toast = (text) => { const t = $('toast'); t.textContent = text; t.hidden = false; clearTimeout(toastTimer); toastTimer = window.setTimeout(() => { t.hidden = true; }, 2800); };
+
+  // ---------------------------------------------------------------- tabs
+  /** @param {string} name */
+  const showTab = (name) => {
+    if (TABS.indexOf(name) < 0) name = 'labels';
+    TABS.forEach((tab) => {
+      $('tab-' + tab).setAttribute('aria-selected', String(tab === name));
+      $('panel-' + tab).hidden = tab !== name;
+    });
+    keep(TAB_KEY, name);
+    window.scrollTo(0, 0);
+  };
+  document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => showTab(b.getAttribute('data-tab') || '')));
 
   /** Messages left today for this connection (reading it costs nothing). */
   const quota = () => {
@@ -175,15 +273,21 @@
       const left = a && a.stats && a.stats.messages_remaining, total = a && a.limits && a.limits.messages;
       if (typeof left !== 'number') return;
       const q = $('quota');
-      q.textContent = left + ' of ' + total + ' relay messages left today on this connection';
+      q.textContent = left + ' of ' + total + ' left on this connection';
       q.dataset.low = String(left < 40);
+      const alert = $('alert');
+      alert.hidden = left >= 40;
+      alert.textContent = left === 0 ? 'The relay\'s daily limit is used up. It resets within 24 hours.' : 'Only ' + left + ' relay messages left today (about ' + Math.floor(left / 2) + ' taps).';
     }).catch(() => {});
   };
 
-  /** @param {string} cmd @param {string} arg @param {HTMLElement} [button] */
-  const send = (cmd, arg, button) => {
-    if (!VALID.test(channel)) { $('setup').open = true; toast('Set the channel first'); return; }
-    if (button) button.classList.add('sent');
+  /** @param {string} cmd @param {string} arg */
+  const send = (cmd, arg) => {
+    if (!VALID.test(channel)) { showTab('more'); toast('Set the channel first'); return; }
+    buzz();
+    pendingMove = cmd === 'status' ? '' : cmd + ':' + arg;
+    render();
+    $('check').dataset.busy = 'true';
     fetch(RELAY + '/' + channel, { method: 'POST', body: JSON.stringify({ cmd, arg }) })
       .then((r) => {
         if (r.status === 429) throw new Error('limit');
@@ -191,16 +295,18 @@
         return r.json();
       })
       .then((m) => {
-        if (cmd !== 'status') toast(cmd === 'reload' ? 'Reloading the kiosk' : 'Sent');
+        if (cmd === 'reload') toast('Reloading the kiosk');
         askedAt = (m && m.time) || now(); silent = false;
         clearTimeout(answerTimer);
-        answerTimer = window.setTimeout(() => { if (heardAt < askedAt) { silent = true; tick(); } }, ANSWER_MS);
+        answerTimer = window.setTimeout(() => { if (heardAt < askedAt) { silent = true; pendingMove = ''; render(); tick(); } }, ANSWER_MS);
         tick();
       })
-      .catch((error) => toast(error && error.message === 'limit'
-        ? 'The relay\'s daily limit is used up for this connection. It resets within 24 hours.'
-        : 'Not sent: check this phone\'s connection'))
-      .finally(() => { if (button) window.setTimeout(() => button.classList.remove('sent'), 600); quota(); });
+      .catch((error) => {
+        pendingMove = ''; $('check').dataset.busy = 'false'; render();
+        toast(error && error.message === 'limit' ? 'The relay\'s daily limit is used up for this connection. It resets within 24 hours.'
+          : 'Not sent: check this phone\'s connection');
+      })
+      .finally(quota);
   };
 
   /** @param {string} title @param {string} sub @param {string} cmd @param {string} arg @param {boolean} on */
@@ -208,7 +314,8 @@
     const b = el('button', 'move', title); b.type = 'button';
     if (sub) b.appendChild(el('small', '', sub));
     b.setAttribute('aria-pressed', String(on));
-    b.addEventListener('click', () => send(cmd, arg, b));
+    b.dataset.pending = String(pendingMove === cmd + ':' + arg);
+    b.addEventListener('click', () => send(cmd, arg));
     return b;
   };
 
@@ -217,6 +324,7 @@
     const rotation = /** @type {HTMLElement} */ (loops.querySelector('[data-cmd="attract"]'));
     while (loops.lastChild && loops.lastChild !== rotation) loops.removeChild(loops.lastChild);
     rotation.setAttribute('aria-pressed', String(!!state && state.screen === 'attract' && !state.pinned));
+    rotation.dataset.pending = String(pendingMove === 'attract:');
     if (!state) return;
     const s = state;
     s.loops.forEach((key) => {
@@ -227,46 +335,61 @@
     s.labels.forEach((pair) => labels.appendChild(moveButton(pair[1], '', 'label', pair[0], s.screen === 'sample' && s.label === pair[0])));
     if (!s.labels.length) labels.appendChild(el('p', 'empty', 'This build has no sample labels.'));
     steps.textContent = '';
-    s.steps.forEach((pair, i) => steps.appendChild(moveButton(pair[1], 'Step ' + (i + 1), 'step', pair[0], s.screen === 'chapter' && s.step === pair[0])));
+    s.steps.forEach((pair, i) => {
+      const b = moveButton(pair[1], '', 'step', pair[0], s.screen === 'chapter' && s.step === pair[0]);
+      b.classList.add('step');
+      b.insertBefore(el('span', 'num', String(i + 1)), b.firstChild);
+      steps.appendChild(b);
+    });
   };
 
+  /** @returns {[string, string]} what the screen shows, and how */
   const describe = () => {
-    if (!state) return 'The backpack has not reported in yet.';
+    if (!VALID.test(channel)) return ['Not connected', 'Enter or make a channel under Connection.'];
+    if (!state) return ['Waiting…', 'The backpack has not answered yet.'];
     const s = state;
-    let what = 'the touch menu';
+    // Visitors' taps are not reported (to save relay messages), so this is the screen as of the last answer.
+    const at = ' · ' + new Date((heardAt + skew) * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     if (s.screen === 'attract') {
       const name = (LOOP_NAMES[s.loop] || [s.loop])[0];
-      what = s.pinned ? name + ' loop, held' : 'loops in turn (' + name + ')';
-    } else if (s.screen === 'sample') { const l = s.labels.filter((p) => p[0] === s.label)[0]; what = 'label ' + (l ? l[1] : s.label); }
-    else if (s.screen === 'chapter') { const c = s.steps.filter((p) => p[0] === s.step)[0]; what = c ? c[1] : 'a step'; }
-    // Visitors' taps are not reported (to save relay messages), so this is the screen as of the last answer.
-    return 'Showing ' + what + ' · as of ' + new Date((heardAt + skew) * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      return s.pinned ? [name, 'Loop, held' + at] : ['Loops in turn', 'Now playing ' + name + at];
+    }
+    if (s.screen === 'sample') { const l = s.labels.filter((p) => p[0] === s.label)[0]; return [l ? l[1] : s.label, 'Sample label' + at]; }
+    if (s.screen === 'chapter') {
+      const i = s.steps.map((p) => p[0]).indexOf(s.step);
+      return [i >= 0 ? s.steps[i][1] : 'A step', 'Step ' + (i + 1) + ' of ' + s.steps.length + at];
+    }
+    return ['Touch menu', 'Ready for a visitor' + at];
   };
 
   const tick = () => {
-    const dot = $('dot'), heard = $('heard');
-    $('showing').textContent = VALID.test(channel) ? describe() : 'Open Setup below and enter the backpack\'s channel.';
-    if (!VALID.test(channel)) { dot.dataset.state = ''; heard.textContent = 'No channel set'; return; }
+    const pill = $('pill'), heard = $('heard');
+    const what = describe();
+    $('what').textContent = what[0]; $('showing').textContent = what[1];
+    $('more-badge').hidden = VALID.test(channel);
+    $('screen-h').hidden = $('screen-group').hidden = !VALID.test(channel);   // nothing to steer until connected
+    if (!VALID.test(channel)) { pill.dataset.state = ''; heard.textContent = 'Not set up'; return; }
     if (askedAt && heardAt < askedAt) {
-      dot.dataset.state = silent ? 'offline' : '';
-      heard.textContent = silent ? 'Backpack didn\'t answer: is it on, online and set to this channel?' : 'Asking the backpack…';
+      pill.dataset.state = silent ? 'offline' : 'asking';
+      heard.textContent = silent ? 'No answer' : 'Asking…';
+      if (silent) $('showing').textContent = 'No answer: is the backpack on, online and on this channel?';
       return;
     }
-    if (!heardAt) { dot.dataset.state = ''; heard.textContent = 'Listening on ' + channel.slice(0, 6) + '…'; return; }
+    $('check').dataset.busy = 'false';
+    if (!heardAt) { pill.dataset.state = ''; heard.textContent = 'Connecting'; return; }
     const ago = Math.max(0, Math.round(now() - heardAt));
-    const when = ago < 60 ? 'just now' : ago < 3600 ? Math.round(ago / 60) + ' min ago' : 'over an hour ago';
-    dot.dataset.state = ago < 300 ? 'online' : 'stale';
-    heard.textContent = (ago < 300 ? 'Backpack answered ' : 'Last answer ') + when;
+    pill.dataset.state = ago < 300 ? 'online' : 'stale';
+    heard.textContent = ago < 60 ? 'Online' : ago < 300 ? Math.round(ago / 60) + ' min ago' : ago < 3600 ? 'Seen ' + Math.round(ago / 60) + ' min ago' : 'Seen over 1 h ago';
   };
 
   const check = () => send('status', '');
 
   const listen = () => {
     if (source) source.close();
-    state = null; heardAt = 0; askedAt = 0; silent = false; render(); tick();
+    state = null; heardAt = 0; askedAt = 0; silent = false; pendingMove = ''; render(); tick();
     $('channel').value = channel;
     $('start').textContent = 'file:///sdcard/packos-kiosk/index.html?remote=' + (channel || '…');
-    if (!VALID.test(channel)) { $('setup').open = true; return; }
+    if (!VALID.test(channel)) { showTab('more'); return; }
     connect(true);
     quota();
   };
@@ -306,25 +429,49 @@
       try { m = JSON.parse(event.data); s = JSON.parse(m.message); } catch (e) { return; }
       if (!m || m.event !== 'message' || !s || s.v !== 1 || m.time < heardAt) return;
       if (!Array.isArray(s.loops) || !Array.isArray(s.labels) || !Array.isArray(s.steps)) return;
-      state = s; heardAt = m.time; render(); tick();
+      state = s; heardAt = m.time;
+      if (heardAt >= askedAt) pendingMove = '';
+      render(); tick();
     });
   };
   // A phone that slept, or a hotspot that changed towers, can leave the stream dead without an error: the relay sends a
   // keepalive every 45 s, so 100 s of silence means reconnect.
   const stale = () => VALID.test(channel) && Date.now() - streamHeard > 100 * 1000;
 
-  document.querySelectorAll('[data-cmd]').forEach((b) => b.addEventListener('click', () => send(b.getAttribute('data-cmd') || '', '', /** @type {HTMLElement} */ (b))));
+  document.querySelectorAll('[data-cmd]').forEach((b) => {
+    const cmd = b.getAttribute('data-cmd') || '';
+    if (cmd !== 'reload') b.addEventListener('click', () => send(cmd, ''));
+  });
+  // Reload interrupts whatever a visitor is doing: it asks for a second tap.
+  let armed = 0;
+  $('reload').addEventListener('click', () => {
+    const button = $('reload');
+    if (!armed) {
+      button.textContent = 'Tap again'; button.classList.add('danger'); $('reload-sub').textContent = 'Tap again within 4 s to reload.';
+      armed = window.setTimeout(() => { armed = 0; button.textContent = 'Reload'; button.classList.remove('danger'); $('reload-sub').textContent = 'Restarts the page on the backpack.'; }, 4000);
+      return;
+    }
+    clearTimeout(armed); armed = 0;
+    button.textContent = 'Reload'; button.classList.remove('danger'); $('reload-sub').textContent = 'Restarts the page on the backpack.';
+    send('reload', '');
+  });
   $('check').addEventListener('click', check);
   $('save').addEventListener('click', () => {
     const value = $('channel').value.trim();
     if (!VALID.test(value)) { toast('Use 12–58 letters, digits, - or _'); return; }
-    channel = value; try { localStorage.setItem(KEY, channel); } catch (e) { /* kept in memory only */ }
-    listen(); toast('Channel set');
+    channel = value; keep(KEY, channel);
+    listen(); showTab('labels'); toast('Connected to ' + channel.slice(0, 6) + '…');
   });
   $('fresh').addEventListener('click', () => {
     const bytes = new Uint8Array(12); crypto.getRandomValues(bytes);
     $('channel').value = 'pk-' + Array.prototype.map.call(bytes, (b) => ('0' + b.toString(16)).slice(-2)).join('');
-    toast('New channel: tap Use, then set the kiosk start page');
+    toast('New channel made: tap Use, then set the backpack\'s start page');
+  });
+  $('copy').addEventListener('click', () => {
+    const text = $('start').textContent;
+    const done = () => toast('Address copied');
+    const fallback = () => { const r = document.createRange(); r.selectNodeContents($('start')); const s = getSelection(); if (s) { s.removeAllRanges(); s.addRange(r); } toast('Selected: copy it from the menu'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
   });
   // Back on this page after a while (a phone locks often at a show): ask what the screen shows now.
   document.addEventListener('visibilitychange', () => {
@@ -333,6 +480,7 @@
     if (now() - Math.max(heardAt, askedAt) > 120) check();
   });
   setInterval(() => { if (stale()) connect(false); tick(); }, 5000);
+  showTab(VALID.test(channel) ? recall(TAB_KEY) || 'labels' : 'more');
   listen();
 })();
 </script>

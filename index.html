@@ -272,16 +272,21 @@
   };
 
   let streamHeard = 0;
+  // Retries back off (3 s doubling to 60 s): ntfy.sh limits requests per address (a burst of 60, then one per 5 s),
+  // shared with the backpack. A connection open for 30 s resets it.
+  let retryMs = 3000, steady = 0;
   /** The relay keeps reports for 12 hours: the last one shows at once, then a check asks for the current screen.
    * @param {boolean} first a new page or channel (not a reconnect after the phone slept) */
   const connect = (first) => {
     if (source) source.close();
+    clearTimeout(steady);
     streamHeard = Date.now();
     const next = new EventSource(RELAY + '/' + channel + '-state/sse?since=' + (first || !heardAt ? '12h' : String(Math.floor(heardAt))));
     source = next;
     let checked = !first;
     next.addEventListener('open', (event) => {
       streamHeard = Date.now();
+      if (!(event instanceof MessageEvent)) { clearTimeout(steady); steady = window.setTimeout(() => { retryMs = 3000; }, 30 * 1000); }
       try { const m = JSON.parse(/** @type {MessageEvent} */ (event).data); if (m && m.time) skew = Date.now() / 1000 - m.time; } catch (e) { /* the browser's own open event */ }
       if (!checked) { checked = true; window.setTimeout(check, 400); }   // once per page open, not on every reconnect
     });
@@ -291,7 +296,9 @@
     next.addEventListener('error', () => {
       if (source !== next) return;
       next.close();
-      window.setTimeout(() => { if (source === next) connect(false); }, 3000);
+      clearTimeout(steady);
+      window.setTimeout(() => { if (source === next) connect(false); }, retryMs);
+      retryMs = Math.min(retryMs * 2, 60 * 1000);
     });
     next.addEventListener('message', (event) => {
       streamHeard = Date.now();

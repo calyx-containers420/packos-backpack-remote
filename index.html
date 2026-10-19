@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#067a6f">
+<meta name="robots" content="noindex">
+<title>Backpack Remote</title>
+<!--
+  packOS backpack remote: staff steer the signage kiosk (demo-studio/kiosk, opened with ?remote=<channel>) from a phone.
+  Commands go to the public ntfy.sh relay on a channel name only staff know; the kiosk answers on <channel>-state with
+  what it is showing. This page holds no secrets: the channel lives in this phone's storage (or the link's #c=…).
+-->
+<style>
+  /* Layout: one thumb-width column; status first, then the moves grouped as the kiosk groups them. */
+  :root {
+    --bg: #f6f7f6; --surface: #ffffff; --ink: #14201e; --muted: #5b6a67; --line: #dfe5e3;
+    --teal: #067a6f; --teal-ink: #ffffff; --teal-soft: #e3f1ef; --ok: #138a4a; --warn: #a86a00; --bad: #b3261e;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1514; --surface: #18201f; --ink: #e8efed; --muted: #9aa9a6; --line: #2a3533;
+      --teal: #2bb3a5; --teal-ink: #06201d; --teal-soft: #173431; --ok: #4fd08a; --warn: #f0b44c; --bad: #ff8a80; color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: var(--bg); color: var(--ink); font: 16px/1.4 var(--sans); -webkit-text-size-adjust: 100%;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: calc(12px + env(safe-area-inset-top, 0px)) calc(32px + env(safe-area-inset-bottom, 0px)); }
+  .wrap { max-width: 520px; margin: 0 auto; display: grid; gap: 20px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .brand { font-weight: 700; font-size: 20px; letter-spacing: -0.01em; }
+  .brand span { color: var(--teal); }
+  .brand small { display: block; font-weight: 500; font-size: 13px; color: var(--muted); letter-spacing: 0; }
+  .status { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; display: grid; gap: 4px; }
+  .status-line { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot[data-state="online"] { background: var(--ok); }
+  .dot[data-state="stale"] { background: var(--warn); }
+  .dot[data-state="offline"] { background: var(--bad); }
+  .showing { color: var(--muted); font-size: 14px; }
+  section { display: grid; gap: 10px; }
+  h2 { margin: 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  button.move { appearance: none; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 12px;
+    min-height: 56px; padding: 10px 12px; font: 600 15px/1.2 var(--sans); text-align: left; cursor: pointer; display: grid; gap: 2px; }
+  button.move small { font-weight: 500; font-size: 12px; color: var(--muted); }
+  button.move:active { transform: scale(0.98); }
+  button.move[aria-pressed="true"] { background: var(--teal); border-color: var(--teal); color: var(--teal-ink); }
+  button.move[aria-pressed="true"] small { color: var(--teal-ink); opacity: 0.85; }
+  button.move.wide { grid-column: 1 / -1; }
+  button.move.sent { outline: 2px solid var(--teal); outline-offset: 2px; }
+  button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+  .empty { color: var(--muted); font-size: 14px; margin: 0; }
+  details { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 12px 16px; }
+  summary { font-weight: 600; cursor: pointer; }
+  .setup { display: grid; gap: 10px; margin-top: 12px; font-size: 14px; }
+  .setup label { font-weight: 600; }
+  .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  input { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: 15px var(--mono);
+    background: var(--bg); color: var(--ink); }
+  button.small { appearance: none; border: 1px solid var(--teal); background: var(--teal-soft); color: var(--ink); border-radius: 10px;
+    padding: 10px 12px; font: 600 14px var(--sans); cursor: pointer; }
+  code { font: 13px/1.45 var(--mono); word-break: break-all; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 10px; display: block; user-select: all; }
+  .hint { color: var(--muted); margin: 0; }
+  .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 999px; font-size: 14px; font-weight: 600; max-width: calc(100% - 32px); }
+  @media (prefers-reduced-motion: reduce) { button.move:active { transform: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">pack<span>OS</span><small>Backpack remote</small></div>
+  </header>
+
+  <div class="status" aria-live="polite">
+    <div class="status-line"><span class="dot" id="dot"></span><span id="heard">No channel set</span></div>
+    <div class="showing" id="showing">Open Setup below and enter the backpack's channel.</div>
+  </div>
+
+  <section aria-labelledby="loops-h">
+    <h2 id="loops-h">Attract loop</h2>
+    <div class="grid" id="loops">
+      <button class="move wide" type="button" data-cmd="attract">All loops in turn<small>The default rotation</small></button>
+    </div>
+  </section>
+
+  <section aria-labelledby="labels-h">
+    <h2 id="labels-h">Show a label</h2>
+    <div class="grid" id="labels"><p class="empty">Labels appear when the backpack reports in.</p></div>
+  </section>
+
+  <section aria-labelledby="steps-h">
+    <h2 id="steps-h">How it works</h2>
+    <div class="grid" id="steps"><p class="empty">Steps appear when the backpack reports in.</p></div>
+  </section>
+
+  <section aria-labelledby="screen-h">
+    <h2 id="screen-h">Screen</h2>
+    <div class="grid">
+      <button class="move" type="button" data-cmd="menu">Menu<small>The touch menu</small></button>
+      <button class="move" type="button" data-cmd="reload">Reload<small>Restart the kiosk page</small></button>
+    </div>
+  </section>
+
+  <details id="setup">
+    <summary>Setup</summary>
+    <div class="setup">
+      <label for="channel">Channel</label>
+      <div class="row">
+        <input id="channel" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="12–58 letters, digits, - or _">
+        <button class="small" type="button" id="save">Use</button>
+      </div>
+      <button class="small" type="button" id="fresh">Make a new channel</button>
+      <p class="hint">Set the kiosk browser's start page to this address, so the backpack listens on the same channel:</p>
+      <code id="start">file:///sdcard/packos-kiosk/index.html?remote=…</code>
+      <p class="hint">Anyone who knows the channel can change what the screen shows (only these buttons, nothing else). Keep it private; make a new one after the show.</p>
+    </div>
+  </details>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+// @ts-check
+(() => {
+  const RELAY = 'https://ntfy.sh';
+  const KEY = 'packos-backpack-channel';
+  const VALID = /^[A-Za-z0-9_-]{12,58}$/;
+  /** Friendly names for the loop files signage.py builds (loop-<key>.mp4). */
+  const LOOP_NAMES = { street: ['Street', 'Walking past: quote in seconds'], gallery: ['All labels', 'Every sample label in turn'],
+    options: ['Finishes & materials', 'One label, every option'], inside: ['Inside the label', 'Layers apart'], booth: ['Booth', 'The longer walkthrough'] };
+  const STALE_S = 150, OFFLINE_S = 600;
+
+  /** @param {string} id @returns {any} */
+  const $ = (id) => document.getElementById(id);
+  /** @param {string} tag @param {string} [cls] @param {string} [text] */
+  const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
+
+  /** @type {null|{v:number,screen:string,loop:string,pinned:boolean,label:string,step:string,loops:string[],labels:[string,string][],steps:[string,string][]}} */
+  let state = null;
+  let heardAt = 0;   // ntfy server time (s) of the latest report
+  let skew = 0;      // phone clock minus server clock, from the relay's own timestamps
+  /** @type {EventSource|null} */
+  let source = null;
+  let channel = '';
+
+  const fromHash = (/[#&]c=([A-Za-z0-9_-]{12,58})/.exec(location.hash) || [])[1] || '';
+  try { channel = fromHash || localStorage.getItem(KEY) || ''; } catch (e) { channel = fromHash; }
+  if (fromHash) { try { localStorage.setItem(KEY, fromHash); } catch (e) { /* kept in memory only */ } history.replaceState(null, '', location.pathname); }
+
+  let toastTimer = 0;
+  /** @param {string} text */
+  const toast = (text) => { const t = $('toast'); t.textContent = text; t.hidden = false; clearTimeout(toastTimer); toastTimer = window.setTimeout(() => { t.hidden = true; }, 2200); };
+
+  /** @param {string} cmd @param {string} arg @param {HTMLElement} [button] */
+  const send = (cmd, arg, button) => {
+    if (!VALID.test(channel)) { $('setup').open = true; toast('Set the channel first'); return; }
+    if (button) button.classList.add('sent');
+    fetch(RELAY + '/' + channel, { method: 'POST', body: JSON.stringify({ cmd, arg }) })
+      .then((r) => { if (!r.ok) throw new Error(String(r.status)); toast(cmd === 'reload' ? 'Reloading the kiosk' : 'Sent'); })
+      .catch(() => toast('Not sent: check this phone\'s connection'))
+      .finally(() => { if (button) window.setTimeout(() => button.classList.remove('sent'), 600); });
+  };
+
+  /** @param {string} title @param {string} sub @param {string} cmd @param {string} arg @param {boolean} on */
+  const moveButton = (title, sub, cmd, arg, on) => {
+    const b = el('button', 'move', title); b.type = 'button';
+    if (sub) b.appendChild(el('small', '', sub));
+    b.setAttribute('aria-pressed', String(on));
+    b.addEventListener('click', () => send(cmd, arg, b));
+    return b;
+  };
+
+  const render = () => {
+    const loops = $('loops'), labels = $('labels'), steps = $('steps');
+    const rotation = /** @type {HTMLElement} */ (loops.querySelector('[data-cmd="attract"]'));
+    while (loops.lastChild && loops.lastChild !== rotation) loops.removeChild(loops.lastChild);
+    rotation.setAttribute('aria-pressed', String(!!state && state.screen === 'attract' && !state.pinned));
+    if (!state) return;
+    state.loops.forEach((key) => {
+      const name = LOOP_NAMES[key] || [key, ''];
+      loops.appendChild(moveButton(name[0], name[1], 'loop', key, state.screen === 'attract' && state.pinned && state.loop === key));
+    });
+    labels.textContent = '';
+    state.labels.forEach((pair) => labels.appendChild(moveButton(pair[1], '', 'label', pair[0], state.screen === 'sample' && state.label === pair[0])));
+    if (!state.labels.length) labels.appendChild(el('p', 'empty', 'This build has no sample labels.'));
+    steps.textContent = '';
+    state.steps.forEach((pair, i) => steps.appendChild(moveButton(pair[1], 'Step ' + (i + 1), 'step', pair[0], state.screen === 'chapter' && state.step === pair[0])));
+  };
+
+  const describe = () => {
+    if (!state) return 'Waiting for the backpack to report in (it does every minute while it is on and online).';
+    if (state.screen === 'attract') {
+      const name = (LOOP_NAMES[state.loop] || [state.loop])[0];
+      return state.pinned ? 'Showing: ' + name + ' loop, held' : 'Showing: loops in turn (now ' + name + ')';
+    }
+    if (state.screen === 'sample') { const l = state.labels.filter((p) => p[0] === state.label)[0]; return 'Showing: label ' + (l ? l[1] : state.label); }
+    if (state.screen === 'chapter') { const s = state.steps.filter((p) => p[0] === state.step)[0]; return 'Showing: ' + (s ? s[1] : 'a step'); }
+    return 'Showing: the touch menu';
+  };
+
+  const tick = () => {
+    const dot = $('dot'), heard = $('heard');
+    if (!VALID.test(channel)) { dot.dataset.state = ''; heard.textContent = 'No channel set'; return; }
+    if (!heardAt) { dot.dataset.state = ''; heard.textContent = 'Listening on ' + channel; $('showing').textContent = describe(); return; }
+    const ago = Math.max(0, Math.round(Date.now() / 1000 - skew - heardAt));
+    dot.dataset.state = ago < STALE_S ? 'online' : ago < OFFLINE_S ? 'stale' : 'offline';
+    const when = ago < 60 ? ago + ' s ago' : Math.round(ago / 60) + ' min ago';
+    heard.textContent = (ago < STALE_S ? 'Backpack online' : ago < OFFLINE_S ? 'Backpack quiet' : 'Backpack not heard from') + ' · ' + when;
+    $('showing').textContent = describe();
+  };
+
+  const listen = () => {
+    if (source) source.close();
+    state = null; heardAt = 0; render(); tick();
+    $('channel').value = channel;
+    $('start').textContent = 'file:///sdcard/packos-kiosk/index.html?remote=' + (channel || '…');
+    if (!VALID.test(channel)) { $('setup').open = true; return; }
+    // The relay keeps recent reports, so the last one (from up to 15 min ago) arrives at once.
+    source = new EventSource(RELAY + '/' + channel + '-state/sse?since=' + (Math.floor(Date.now() / 1000) - 900));
+    source.addEventListener('open', (event) => {
+      try { const m = JSON.parse(/** @type {MessageEvent} */ (event).data); if (m && m.time) skew = Date.now() / 1000 - m.time; } catch (e) { /* the browser's own open event */ }
+    });
+    source.addEventListener('message', (event) => {
+      let m = null, s = null;
+      try { m = JSON.parse(event.data); s = JSON.parse(m.message); } catch (e) { return; }
+      if (!m || m.event !== 'message' || !s || s.v !== 1 || m.time < heardAt) return;
+      if (!Array.isArray(s.loops) || !Array.isArray(s.labels) || !Array.isArray(s.steps)) return;
+      state = s; heardAt = m.time; render(); tick();
+    });
+  };
+
+  document.querySelectorAll('[data-cmd]').forEach((b) => b.addEventListener('click', () => send(b.getAttribute('data-cmd') || '', '', /** @type {HTMLElement} */ (b))));
+  $('save').addEventListener('click', () => {
+    const value = $('channel').value.trim();
+    if (!VALID.test(value)) { toast('Use 12–58 letters, digits, - or _'); return; }
+    channel = value; try { localStorage.setItem(KEY, channel); } catch (e) { /* kept in memory only */ }
+    listen(); toast('Channel set');
+  });
+  $('fresh').addEventListener('click', () => {
+    const bytes = new Uint8Array(12); crypto.getRandomValues(bytes);
+    $('channel').value = 'pk-' + Array.prototype.map.call(bytes, (b) => ('0' + b.toString(16)).slice(-2)).join('');
+    toast('New channel: tap Use, then set the kiosk start page');
+  });
+  setInterval(tick, 5000);
+  listen();
+})();
+</script>
+</body>
+</html>
